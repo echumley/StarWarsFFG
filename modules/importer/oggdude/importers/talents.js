@@ -53,10 +53,7 @@ export default class Talents {
                 activationLabel = "SWFFG.TalentActivationsPassive";
             }
 
-            if (item.Description.split('\n').length > 0 && item.Description.includes('[H4]')) {
-              // remove the item name in the description....
-              item.Description = item.Description.replace('\n\n', '\n').split('\n').slice(1).join('<br>');
-            }
+            item.Description = ImportHelpers.cleanDescription(item.Description);
 
             data.data = {
               attributes: {},

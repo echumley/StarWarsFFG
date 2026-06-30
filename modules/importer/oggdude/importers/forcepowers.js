@@ -45,15 +45,10 @@ export default class ForcePowers {
               return ability.Key === basePowerKey;
             });
 
-            if (item.Description.split('\n').length > 0 && item.Description.includes('[H4]')) {
-              // remove the item name in the description....
-              item.Description = item.Description.replace('\n\n', '\n').split('\n').slice(1).join('<br>');
-            }
-
             let data = ImportHelpers.prepareBaseObject(item, "forcepower");
             data.data = {
               attributes: {},
-              description: basepower.Description,
+              description: ImportHelpers.cleanDescription(basepower.Description),
               upgrades: {},
               required_force_rating: item?.MinForceRating ? item.MinForceRating : 1,
               metadata: {

@@ -29,9 +29,7 @@ export default class Skills {
 
     await ImportHelpers.asyncForEach(items, async (item) => {
       try {
-        if (item.Description.split('\n').length > 0) {
-          item.Description = item.Description.replace('\n\n', '\n').split('\n').slice(1).join('<br>');
-        }
+        item.Description = ImportHelpers.cleanDescription(item.Description);
 
         let data = {
           name: `${item.TypeValue === "stKnowledge" ? "Knowledge: " : ""}${item.Name.replace(" - ", ": ")}`,

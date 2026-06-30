@@ -2277,6 +2277,34 @@ export default class ImportHelpers {
     return sourceText;
   }
 
+  /**
+   * Cleans an OggDude item description for storage. Normalises line endings,
+   * drops a leading [H4]Name[h4] duplicate of the item name, and converts
+   * OggDude markup tokens ([H4], [B], [P], ...) to HTML.
+   * @param {string} description - Raw description text from the dataset.
+   * @returns {string} Cleaned HTML description.
+   */
+  static cleanDescription(description) {
+    const text = (description || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+    const lines = text.split("\n");
+    if (lines.length && lines[0].includes("[H4]")) {
+      lines.shift();
+    }
+    return lines
+      .join("<br>")
+      .replace(/^(<br>)+/, "")
+      .replace(/\[H4\]/g, "<h4>")
+      .replace(/\[h4\]/g, "</h4>")
+      .replace(/\[H3\]/g, "<h3>")
+      .replace(/\[h3\]/g, "</h3>")
+      .replace(/\[B\]/g, "<b>")
+      .replace(/\[b\]/g, "</b>")
+      .replace(/\[I\]/g, "<i>")
+      .replace(/\[i\]/g, "</i>")
+      .replace(/\[BR\]/g, "<br>")
+      .replace(/\[P\]/g, "");
+  }
+
   static prepareBaseObject(obj, type) {
     return {
       name: obj.Name,

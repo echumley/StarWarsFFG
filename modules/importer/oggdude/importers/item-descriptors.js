@@ -40,7 +40,7 @@ export default class ItemDescriptors {
         }
         data.img = `/systems/starwarsffg/images/mod-${item.Type ? item.Type.toLowerCase() : "all"}.png`;
         data.data = {
-          description: item.Description?.length ? item.Description : item.ModDesc,
+          description: ImportHelpers.cleanDescription(item.Description?.length ? item.Description : item.ModDesc),
           attributes: {},
           type: item.Type ? item.Type.toLowerCase() : "all",
           rank: 1,

@@ -28,9 +28,7 @@ export default class Gear {
           try {
             let data = ImportHelpers.prepareBaseObject(item, "gear");
 
-            if (item.Description.split('\n').length > 0) {
-              item.Description = item.Description.replace('\n\n', '\n').split('\n').slice(1).join('<br>');
-            }
+            item.Description = ImportHelpers.cleanDescription(item.Description);
 
             data.data = {
               attributes: {},
