@@ -2213,34 +2213,40 @@ export default class ImportHelpers {
    * @returns {*[]}
    */
   static getSourcesAsArray(sources) {
-    let parsedSources = [];
+    const parsedSources = [];
 
     // if there are no sources, don't bother trying to parse
     if (!sources) {
       return parsedSources;
     }
 
-    // sometimes there's a single source not inside a `source` block
-    if (sources?._) {
-      sources.Source = [sources];
+    // normalize into an array of source entries
+    let arr;
+    if (Array.isArray(sources)) {
+      // multiple <Source> siblings without a <Sources> wrapper
+      arr = sources;
+    } else if (typeof sources === "string") {
+      // <Source>User Data</Source> (no attributes)
+      arr = [{ _: sources }];
+    } else if (sources.Source !== undefined) {
+      // <Sources><Source/>...</Sources> wrapper
+      arr = Array.isArray(sources.Source) ? sources.Source : [sources.Source];
+    } else {
+      // single <Source Page="x">text</Source>
+      arr = [sources];
     }
 
-    try {
-      // convert the sources to an array if they aren't already one (silly XML)
-      if (!Array.isArray(sources.Source)) {
-        sources.Source = [sources.Source];
+    for (const source of arr) {
+      if (source == null) {
+        continue;
       }
-
-      for (const source of sources.Source) {
-        if (source?.$Page) {
-          parsedSources.push(`${source._} pg.${source.$Page}`);
-        } else {
-          parsedSources.push(source._);
-        }
+      if (typeof source === "string") {
+        parsedSources.push(source);
+      } else if (source.$Page != null) {
+        parsedSources.push(`${source._} pg.${source.$Page}`);
+      } else if (source._ != null) {
+        parsedSources.push(source._);
       }
-    } catch {
-      // in all the cases I looked at, this is due to bad data. just return what we've got so far
-      return parsedSources;
     }
     return parsedSources;
   }
