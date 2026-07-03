@@ -1,10 +1,4 @@
 `2.0.4`
-* Fixes:
-  * Fixed some issues with the importrt code, [@KamiliaBlow](https://github.com/KamiliaBlow))
-    * Fixed a formatting error during import that caused the description block for careers to be empty
-    * Fixed an import issue that could corrupt the entire dataset import when modifying Skills.xml; this occurred if the ```<Name>``` element contained a translation into another language. ([#2170](https://github.com/StarWarsFoundryVTT/StarWarsFFG/issues/2170))
-    * Fixed a bug in the Specializations import feature that did not account for the presence of tags has been fixed. Now, if a user wants to add tags to Specializations, the system will correctly read them from the Specializations file
-    * The import of sources has been updated; these sources could be of the following types: ```<Source>User Data</Source>``` and ```<Source/> <Source/>```. ([#2268](https://github.com/StarWarsFoundryVTT/StarWarsFFG/issues/2268))
 * Features:
   * Added a compendium browser to search and filter items across all world compendiums! ([#2267](https://github.com/StarWarsFoundryVTT/StarWarsFFG/pull/2267), [@KamiliaBlow](https://github.com/KamiliaBlow))
     * Accessible via a button in the compendiums directory for all users (not just GMs)
