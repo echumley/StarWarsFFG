@@ -36,9 +36,7 @@ export default class Vehicles {
 
             const pack = isSpaceVehicle ? await ImportHelpers.getCompendiumPack("Actor", `oggdude.Vehicles.Space`) : await ImportHelpers.getCompendiumPack("Actor", `oggdude.Vehicles.Planetary`);
 
-            if (item.Description.split('\n').length > 0) {
-              item.Description = item.Description.replace('\n\n', '\n').split('\n').slice(1).join('<br>');
-            }
+            item.Description = ImportHelpers.cleanDescription(item.Description);
 
             let data = ImportHelpers.prepareBaseObject(item, "vehicle");
             data.items = [];

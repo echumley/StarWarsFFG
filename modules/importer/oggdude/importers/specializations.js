@@ -33,10 +33,7 @@ export default class Specializations {
             const specializationData = JXON.xmlToJs(xmlData);
             const item = specializationData.Specialization;
 
-            if (item.Description.split('\n').length > 0 && item.Description.includes('[H4]')) {
-              // remove the item name in the description....
-              item.Description = item.Description.replace('\n\n', '\n').split('\n').slice(1).join('<br>');
-            }
+            item.Description = ImportHelpers.cleanDescription(item.Description);
 
             let data = ImportHelpers.prepareBaseObject(item, "specialization");
             data.system = {
@@ -131,17 +128,17 @@ export default class Specializations {
             try {
               if (Array.isArray(item.Categories.Category)) {
                 for (const tag of item.Categories.Category) {
-                  data.data.metadata.tags.push(tag.toLowerCase());
+                  data.system.metadata.tags.push(tag.toLowerCase());
                 }
               } else {
-                data.data.metadata.tags.push(item.Categories.Category.toLowerCase());
+                data.system.metadata.tags.push(item.Categories.Category.toLowerCase());
               }
             } catch (err) {
               CONFIG.logger.debug(`No categories found for item ${item.Key}`);
             }
             if (item?.Type) {
               // the "type" can be useful as a tag as well
-              data.data.metadata.tags.push(item.Type.toLowerCase());
+              data.system.metadata.tags.push(item.Type.toLowerCase());
             }
 
             let imgPath = await ImportHelpers.getImageFilename(zip, "Specialization", "", data.flags.starwarsffg.ffgimportid);

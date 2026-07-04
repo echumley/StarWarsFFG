@@ -2213,34 +2213,40 @@ export default class ImportHelpers {
    * @returns {*[]}
    */
   static getSourcesAsArray(sources) {
-    let parsedSources = [];
+    const parsedSources = [];
 
     // if there are no sources, don't bother trying to parse
     if (!sources) {
       return parsedSources;
     }
 
-    // sometimes there's a single source not inside a `source` block
-    if (sources?._) {
-      sources.Source = [sources];
+    // normalize into an array of source entries
+    let arr;
+    if (Array.isArray(sources)) {
+      // multiple <Source> siblings without a <Sources> wrapper
+      arr = sources;
+    } else if (typeof sources === "string") {
+      // <Source>User Data</Source> (no attributes)
+      arr = [{ _: sources }];
+    } else if (sources.Source !== undefined) {
+      // <Sources><Source/>...</Sources> wrapper
+      arr = Array.isArray(sources.Source) ? sources.Source : [sources.Source];
+    } else {
+      // single <Source Page="x">text</Source>
+      arr = [sources];
     }
 
-    try {
-      // convert the sources to an array if they aren't already one (silly XML)
-      if (!Array.isArray(sources.Source)) {
-        sources.Source = [sources.Source];
+    for (const source of arr) {
+      if (source == null) {
+        continue;
       }
-
-      for (const source of sources.Source) {
-        if (source?.$Page) {
-          parsedSources.push(`${source._} pg.${source.$Page}`);
-        } else {
-          parsedSources.push(source._);
-        }
+      if (typeof source === "string") {
+        parsedSources.push(source);
+      } else if (source.$Page != null) {
+        parsedSources.push(`${source._} pg.${source.$Page}`);
+      } else if (source._ != null) {
+        parsedSources.push(source._);
       }
-    } catch {
-      // in all the cases I looked at, this is due to bad data. just return what we've got so far
-      return parsedSources;
     }
     return parsedSources;
   }
@@ -2275,6 +2281,57 @@ export default class ImportHelpers {
     const sourceText = `<p><h3>Sources:</h3>${text.join("")}</p>`;
 
     return sourceText;
+  }
+
+  /**
+   * Cleans an OggDude item description for storage. Normalises line endings,
+   * drops a leading [H4]Name[h4] duplicate of the item name, and converts
+   * OggDude markup tokens ([H4], [B], [P], ...) to HTML.
+   * @param {string} description - Raw description text from the dataset.
+   * @returns {string} Cleaned HTML description.
+   */
+  static cleanDescription(description) {
+    const text = (description || "").replace(/\r\n/g, "\n").replace(/\r/g, "\n").trim();
+    const lines = text.split("\n");
+    if (lines.length && lines[0].includes("[H4]")) {
+      lines.shift();
+    }
+    return lines
+      .join("<br>")
+      .replace(/^(<br>)+/, "")
+      .replace(/\[H4\]/g, "<h4>")
+      .replace(/\[h4\]/g, "</h4>")
+      .replace(/\[H3\]/g, "<h3>")
+      .replace(/\[h3\]/g, "</h3>")
+      .replace(/\[B\]/g, "<b>")
+      .replace(/\[b\]/g, "</b>")
+      .replace(/\[I\]/g, "<i>")
+      .replace(/\[i\]/g, "</i>")
+      .replace(/\[BR\]/g, "<br>")
+      .replace(/\[P\]/g, "");
+  }
+
+  static _skillKeyToName = null;
+
+  /**
+   * Resolves an OggDude skill Key to the system's stable skill key (the English
+   * name used as the key in CONFIG.FFG.skills), derived from the skill
+   * templates so it is independent of the translatable <Name> in Skills.xml.
+   * @param {string} oggKey - OggDude skill Key (e.g. "ASTRO").
+   * @returns {string|undefined} System skill key (e.g. "Astrogation"), or
+   *   undefined if the Key is not a recognised built-in skill.
+   */
+  static oggSkillKeyToSystemKey(oggKey) {
+    if (ImportHelpers._skillKeyToName === null) {
+      ImportHelpers._skillKeyToName = {};
+      for (const template of [ImportHelpers.minionTemplate, ImportHelpers.characterTemplate]) {
+        const skills = template?.data?.skills ?? {};
+        for (const [name, def] of Object.entries(skills)) {
+          if (def?.Key) ImportHelpers._skillKeyToName[def.Key] ??= name;
+        }
+      }
+    }
+    return ImportHelpers._skillKeyToName[oggKey];
   }
 
   static prepareBaseObject(obj, type) {

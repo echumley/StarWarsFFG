@@ -33,10 +33,7 @@ export default class Species {
             const speciesData = JXON.xmlToJs(xmlData);
             const item = speciesData.Species;
 
-            if (item.Description.split('\n').length > 0 && item.Description.includes('[H4]')) {
-              // remove the item name in the description....
-              item.Description = item.Description.replace('\n\n', '\n').split('\n').slice(1).join('<br>');
-            }
+            item.Description = ImportHelpers.cleanDescription(item.Description);
 
             let data = ImportHelpers.prepareBaseObject(item, "species");
 

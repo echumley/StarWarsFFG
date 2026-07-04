@@ -29,9 +29,7 @@ export default class Skills {
 
     await ImportHelpers.asyncForEach(items, async (item) => {
       try {
-        if (item.Description.split('\n').length > 0) {
-          item.Description = item.Description.replace('\n\n', '\n').split('\n').slice(1).join('<br>');
-        }
+        item.Description = ImportHelpers.cleanDescription(item.Description);
 
         let data = {
           name: `${item.TypeValue === "stKnowledge" ? "Knowledge: " : ""}${item.Name.replace(" - ", ": ")}`,
@@ -49,7 +47,8 @@ export default class Skills {
             },
           }],
         };
-        CONFIG.temporary.skills[data.flags.starwarsffg.ffgimportid] = data.name;
+        const skillId = data.flags.starwarsffg.ffgimportid;
+        CONFIG.temporary.skills[skillId] = ImportHelpers.oggSkillKeyToSystemKey(skillId) ?? data.name;
 
         if (createJournalCompendium) {
           switch (item.TypeValue) {

@@ -203,7 +203,7 @@ export default class DataImporter extends HandlebarsApplicationMixin(Application
         for (const doc of skillDocs) {
           const importId = doc.flags?.starwarsffg?.ffgimportid;
           if (importId) {
-            CONFIG.temporary.skills[importId] = doc.name;
+            CONFIG.temporary.skills[importId] = ImportHelpers.oggSkillKeyToSystemKey(importId) ?? doc.name;
           }
         }
         this._importLogger(`Loaded ${Object.keys(CONFIG.temporary.skills).length} skills from world compendium`);
