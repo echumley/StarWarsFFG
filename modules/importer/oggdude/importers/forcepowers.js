@@ -45,10 +45,12 @@ export default class ForcePowers {
               return ability.Key === basePowerKey;
             });
 
+            basepower.Description = ImportHelpers.cleanDescription(basepower.Description);
+
             let data = ImportHelpers.prepareBaseObject(item, "forcepower");
             data.data = {
               attributes: {},
-              description: ImportHelpers.cleanDescription(basepower.Description),
+              description: basepower.Description,
               upgrades: {},
               required_force_rating: item?.MinForceRating ? item.MinForceRating : 1,
               metadata: {

@@ -38,9 +38,12 @@ export default class ItemDescriptors {
         } else {
           data = ImportHelpers.prepareBaseObject(item, "itemmodifier");
         }
+
+        item.Description = ImportHelpers.cleanDescription(item.Description?.length ? item.Description : item.ModDesc);
+
         data.img = `/systems/starwarsffg/images/mod-${item.Type ? item.Type.toLowerCase() : "all"}.png`;
         data.data = {
-          description: ImportHelpers.cleanDescription(item.Description?.length ? item.Description : item.ModDesc),
+          description: item.Description,
           attributes: {},
           type: item.Type ? item.Type.toLowerCase() : "all",
           rank: 1,
