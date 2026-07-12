@@ -7,7 +7,7 @@ import DiceHelpers from "../helpers/dice-helpers.js";
 import ActorOptions from "./actor-ffg-options.js";
 import ImportHelpers from "../importer/import-helpers.js";
 import ModifierHelpers from "../helpers/modifiers.js";
-import ActorHelpers, {xpLogEarn, xpLogSpend} from "../helpers/actor-helpers.js";
+import ActorHelpers, {queueXpLogUpdate, xpLogEarn, xpLogSpend} from "../helpers/actor-helpers.js";
 import ItemHelpers from "../helpers/item-helpers.js";
 import EmbeddedItemHelpers from "../helpers/embeddeditem-helpers.js";
 import EffectHelpers from "../helpers/effects.js";
@@ -385,9 +385,14 @@ export class ActorSheetFFG extends foundry.appv1.sheets.ActorSheet {
     html.find(".popout-editor .popout-editor-button").on("click", this._onPopoutEditor.bind(this));
 
     // Setup dice pool image and hide filtered skills
-    html.find(".skill").each(async (_, elem) => {
-      await DiceHelpers.addSkillDicePool(await this.getData({}), elem);
-      const filters = this._filters.skills;
+    // addSkillDicePool only reads skills/characteristics, and looks each skill up by name from
+    // the row's data-ability, so one shared object serves every row. This previously called
+    // getData() inside the loop, deep-cloning the whole actor once per skill row (35+ clones a
+    // render) - and since each XP purchase adds an Active Effect and an xpLog entry to that
+    // clone, the cost grew with every purchase the character had ever made.
+    const skillData = { data: this.actor.system };
+    html.find(".skill").each((_, elem) => {
+      DiceHelpers.addSkillDicePool(skillData, elem);
     });
 
     // Everything below here is only needed if the sheet is editable
@@ -1773,9 +1778,9 @@ export class ActorSheetFFG extends foundry.appv1.sheets.ActorSheet {
    */
   async _buySkillRank(a) {
     const skill = $(a).data("ability");
+    // these drive the confirmation prompt only; the purchase itself re-reads them on confirm
     const curRank = this.object.system.skills[skill].rank;
     const availableXP = this.object.system.experience.available;
-    const totalXP = this.object.system.experience.total;
     const careerSkill = this.object.system.skills[skill].careerskill;
     const cost = careerSkill ? (curRank + 1) * 5 : (curRank + 1) * 5 + 5;
 
@@ -1794,8 +1799,21 @@ export class ActorSheetFFG extends foundry.appv1.sheets.ActorSheet {
             callback: async (that) => {
               if(!this.actor.verifyEditModeIsNotEnabled()) return;
 
-              const id = await this._spendXp(`system.skills.${skill}.rank`, 1, cost);
-              await xpLogSpend(game.actors.get(this.object.id), `skill rank ${skill} ${curRank} --> ${curRank + 1}`, cost, availableXP - cost, totalXP, id);
+              // re-read at confirm time: the values above were captured before this dialog opened,
+              // so another purchase may have landed since. Using the stale ones let a player
+              // overspend and wrote the wrong running totals into the XP log.
+              const liveRank = this.object.system.skills[skill].rank;
+              const liveAvailableXP = this.object.system.experience.available;
+              const liveTotalXP = this.object.system.experience.total;
+              const liveCost = careerSkill ? (liveRank + 1) * 5 : (liveRank + 1) * 5 + 5;
+
+              if (liveCost > liveAvailableXP) {
+                ui.notifications.warn(game.i18n.localize("SWFFG.Actors.Sheets.Purchase.NotEnoughXP"));
+                return;
+              }
+
+              const id = await this._spendXp(`system.skills.${skill}.rank`, 1, liveCost);
+              await xpLogSpend(game.actors.get(this.object.id), `skill rank ${skill} ${liveRank} --> ${liveRank + 1}`, liveCost, liveAvailableXP - liveCost, liveTotalXP, id);
             },
           },
           cancel: {
@@ -1872,29 +1890,32 @@ export class ActorSheetFFG extends foundry.appv1.sheets.ActorSheet {
 
                 await this.object.deleteEmbeddedDocuments("ActiveEffect", [purchasedEffect.id]);
                 CONFIG.logger.debug("deleted AE, updating log");
-                let logEntries = this.object.getFlag("starwarsffg", "xpLog") || [];
-                let cost = 0;
-                let description = 'unknown';
-                for (const entry of logEntries) {
-                  if (entry.id === purchaseId) {
-                    cost = entry.xp.cost;
-                    description = entry.description;
-                    entry.id = undefined;  // denotes that there is no an AE for the purchase
+                // queued for the same reason as the purchase writes: this is a read-modify-write
+                // of the whole log array, so an overlapping purchase would clobber it
+                await queueXpLogUpdate(this.object, (logEntries) => {
+                  let cost = 0;
+                  let description = 'unknown';
+                  for (const entry of logEntries) {
+                    if (entry.id === purchaseId) {
+                      cost = entry.xp.cost;
+                      description = entry.description;
+                      entry.id = undefined;  // denotes that there is no an AE for the purchase
+                    }
                   }
-                }
-                const date = new Date().toISOString().slice(0, 10);
-                logEntries.unshift({
-                  action: 'refunded',
-                  id: undefined,
-                  xp: {
-                    cost: cost,
-                    available: this.object.system.experience.available,
-                    total: this.object.system.experience.total,
-                  },
-                  date: date,
-                  description: description,
+                  const date = new Date().toISOString().slice(0, 10);
+                  logEntries.unshift({
+                    action: 'refunded',
+                    id: undefined,
+                    xp: {
+                      cost: cost,
+                      available: this.object.system.experience.available,
+                      total: this.object.system.experience.total,
+                    },
+                    date: date,
+                    description: description,
+                  });
+                  return logEntries;
                 });
-                await this.object.setFlag("starwarsffg", "xpLog", logEntries);
                 CONFIG.logger.debug(`completed refund for ${purchaseId}!`);
               },
             },
@@ -2535,17 +2556,15 @@ export class ActorSheetFFG extends foundry.appv1.sheets.ActorSheet {
   }
 
   async _buyCharacteristicRank(characteristic) {
+    // these drive the confirmation prompt only; the purchase itself re-reads them on confirm
     // this is the current value of the characteristic (including Active Effects)
     const characteristicValue = this.actor.system.characteristics[characteristic].value;
-    // this is the value without items that modify it
-    const characteristicWithoutAEs =  this.object.toObject().system.characteristics[characteristic].value;
 
     if (characteristicValue >= game.settings.get("starwarsffg", "maxAttribute")) {
       ui.notifications.warn(game.i18n.localize("SWFFG.Actors.Sheets.Purchase.Characteristic.Max"));
       return;
     }
     const availableXP = this.actor.system.experience.available;
-    const totalXP = this.actor.system.experience.total;
     const cost = (characteristicValue + 1) * 10;
     if (cost > availableXP) {
       ui.notifications.warn(game.i18n.localize("SWFFG.Actors.Sheets.Purchase.NotEnoughXP"));
@@ -2562,9 +2581,27 @@ export class ActorSheetFFG extends foundry.appv1.sheets.ActorSheet {
             callback: async (that) => {
               if(!this.actor.verifyEditModeIsNotEnabled()) return;
 
-              const statusId = await this._spendXp(`system.characteristics.${characteristic}.value`, 1, cost);
-              await xpLogSpend(game.actors.get(this.object.id), `characteristic ${characteristic} level ${characteristicValue} --> ${characteristicValue + 1}`, cost, availableXP - cost, totalXP, statusId);
-              await this.render(true);
+              // re-read at confirm time: the values above were captured before this dialog opened,
+              // so another purchase may have landed since. Using the stale ones let a player
+              // overspend and wrote the wrong running totals into the XP log.
+              const liveValue = this.actor.system.characteristics[characteristic].value;
+              const liveAvailableXP = this.actor.system.experience.available;
+              const liveTotalXP = this.actor.system.experience.total;
+              const liveCost = (liveValue + 1) * 10;
+
+              if (liveValue >= game.settings.get("starwarsffg", "maxAttribute")) {
+                ui.notifications.warn(game.i18n.localize("SWFFG.Actors.Sheets.Purchase.Characteristic.Max"));
+                return;
+              }
+              if (liveCost > liveAvailableXP) {
+                ui.notifications.warn(game.i18n.localize("SWFFG.Actors.Sheets.Purchase.NotEnoughXP"));
+                return;
+              }
+
+              const statusId = await this._spendXp(`system.characteristics.${characteristic}.value`, 1, liveCost);
+              await xpLogSpend(game.actors.get(this.object.id), `characteristic ${characteristic} level ${liveValue} --> ${liveValue + 1}`, liveCost, liveAvailableXP - liveCost, liveTotalXP, statusId);
+              // no explicit render: creating the Active Effect and writing the xpLog flag are both
+              // document updates, and each already re-renders the sheet on its own
             },
           },
           cancel: {

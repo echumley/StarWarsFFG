@@ -71,6 +71,13 @@ export default class ActorHelpers {
    * Records the state of all active effects on the actor and then suspends them.
    * This is used to enable manual editing without an infinite loop from the two being combined
    * Note that this returns a state, which is REQUIRED to restore the original AE state
+   *
+   * The two modes are deliberately asymmetric:
+   *  - persistChanges=false uses updateSource(), which is an in-memory change with no DB write
+   *  - persistChanges=true must hit the DB, so those changes are batched into a single
+   *    updateEmbeddedDocuments() call per parent. Writing them one-at-a-time cost two round
+   *    trips per effect, and since every XP purchase adds an effect, granting XP to a
+   *    high-XP character fired hundreds of sequential writes.
    * @param actor
    * @param persistChanges - defaults to False, and generally should be. For GM XP granting, this should be True
    * @returns {Promise<{directEffects: *[], itemEffects: {}}>}
@@ -85,6 +92,7 @@ export default class ActorHelpers {
     };
 
     // Record direct effects
+    const actorEffectUpdates = [];
     for (const effect of actor.effects) {
       initialState.directEffects.push({
         id: effect.id,
@@ -92,16 +100,20 @@ export default class ActorHelpers {
       });
       // update source so we don't persist disabling effects
       if (!persistChanges) {
-        await effect.updateSource({disabled: true});
+        effect.updateSource({disabled: true});
       } else {
-        await effect.update({disabled: true});
+        actorEffectUpdates.push({_id: effect.id, disabled: true});
       }
+    }
+    if (actorEffectUpdates.length > 0) {
+      await actor.updateEmbeddedDocuments("ActiveEffect", actorEffectUpdates);
     }
 
     // Record item-based effects
     for (const item of actor.items) {
       CONFIG.logger.debug(`> examining ${item.name}`);
       initialState.itemEffects[item.id] = [];
+      const itemEffectUpdates = [];
       for (const effect of item.effects) {
         CONFIG.logger.debug(`>> Recording state for ${effect.name}`);
         initialState.itemEffects[item.id].push({
@@ -110,30 +122,39 @@ export default class ActorHelpers {
         });
         CONFIG.logger.debug(`>> Disabling AE for ${effect.name}`);
         if (!persistChanges) {
-          await effect.updateSource({disabled: true});
+          effect.updateSource({disabled: true});
         } else {
-          await effect.update({disabled: true});
+          itemEffectUpdates.push({_id: effect.id, disabled: true});
         }
+      }
+      if (itemEffectUpdates.length > 0) {
+        await item.updateEmbeddedDocuments("ActiveEffect", itemEffectUpdates);
       }
     }
 
-    CONFIG.logger.debug(`Final initial state: ${JSON.stringify(initialState)}`);
+    // pass the object rather than pre-serializing it; a template literal would run
+    // JSON.stringify on every call even when debug logging is disabled
+    CONFIG.logger.debug("Final initial state:", initialState);
     return initialState;
   }
 
   static async endEditMode(actor, originalState, persistChanges=false) {
-    CONFIG.logger.debug(`Ending Edit mode for ${actor.name} - original state: ${JSON.stringify(originalState)}`);
+    CONFIG.logger.debug(`Ending Edit mode for ${actor.name} - original state:`, originalState);
     // revert the state for direct effects
+    const actorEffectUpdates = [];
     for (const effect of actor.effects) {
       const locatedEffect = originalState.directEffects.find((s) => s.id === effect.id);
       if (locatedEffect && effect.disabled !== locatedEffect.disabled) {
         // update source so we don't persist disabling effects
         if (!persistChanges) {
-          await effect.updateSource({disabled: locatedEffect.disabled});
+          effect.updateSource({disabled: locatedEffect.disabled});
         } else {
-          await effect.update({disabled: locatedEffect.disabled});
+          actorEffectUpdates.push({_id: effect.id, disabled: locatedEffect.disabled});
         }
       }
+    }
+    if (actorEffectUpdates.length > 0) {
+      await actor.updateEmbeddedDocuments("ActiveEffect", actorEffectUpdates);
     }
 
     // revert the state for item-based effects
@@ -141,26 +162,54 @@ export default class ActorHelpers {
       CONFIG.logger.debug(`> examining ${item.name}`);
       if (item.id in originalState.itemEffects) {
         const storedItemState = originalState.itemEffects[item.id];
-        CONFIG.logger.debug(`> found item AEs in stored state: ${JSON.stringify(storedItemState)}`);
+        CONFIG.logger.debug("> found item AEs in stored state:", storedItemState);
+        const itemEffectUpdates = [];
         for (const effect of item.effects) {
           CONFIG.logger.debug(`>> examining ${effect.name}`);
           const storedEffectState = storedItemState.find((s) => s.id === effect.id);
           if (storedEffectState && effect.disabled !== storedEffectState.disabled) {
             CONFIG.logger.debug(">>> found a stored state for this effect, making adjustments");
             if (!persistChanges) {
-              await effect.updateSource({disabled: storedEffectState.disabled});
+              effect.updateSource({disabled: storedEffectState.disabled});
             } else {
-              await effect.update({disabled: storedEffectState.disabled});
+              itemEffectUpdates.push({_id: effect.id, disabled: storedEffectState.disabled});
             }
           } else {
             CONFIG.logger.debug(">>> no stored state for this effect or the state is the same, not making adjustments");
           }
+        }
+        if (itemEffectUpdates.length > 0) {
+          await item.updateEmbeddedDocuments("ActiveEffect", itemEffectUpdates);
         }
       } else {
         CONFIG.logger.debug("> no item AEs in stored state, skipping further processing");
       }
     }
   }
+}
+
+/**
+ * Serializes all mutations of the xpLog flag.
+ *
+ * The log lives in a single flag holding one array, so every write is a read-modify-write.
+ * Two purchases confirmed in quick succession would both read the pre-write log and the
+ * second setFlag would clobber the first entry, leaving its Active Effect on the actor with
+ * no log row pointing at it - an orphaned purchase that can never be refunded.
+ *
+ * The flag is re-read inside the queued section, so each mutation sees the previous one's result.
+ * @param actor - ffgActor object
+ * @param mutate - receives the current log array, returns the new one
+ * @returns {Promise<void>}
+ */
+let xpLogQueue = Promise.resolve();
+export async function queueXpLogUpdate(actor, mutate) {
+  const update = xpLogQueue.then(async () => {
+    const xpLog = actor.getFlag("starwarsffg", "xpLog") || [];
+    await actor.setFlag("starwarsffg", "xpLog", mutate(xpLog));
+  });
+  // swallow failures on the chain itself so one bad write doesn't wedge every later one
+  xpLogQueue = update.catch(() => {});
+  return update;
 }
 
 /**
@@ -174,7 +223,6 @@ export default class ActorHelpers {
  * @returns {Promise<void>}
  */
 export async function xpLogSpend(actor, action, cost, available, total, statusId=undefined) {
-  const xpLog = actor.getFlag("starwarsffg", "xpLog") || [];
   const date = new Date().toISOString().slice(0, 10);
   const newEntry = {
     action: 'purchased',
@@ -187,7 +235,7 @@ export async function xpLogSpend(actor, action, cost, available, total, statusId
     date: date,
     description: action,
   };
-  await actor.setFlag("starwarsffg", "xpLog", [newEntry, ...xpLog]);
+  await queueXpLogUpdate(actor, (xpLog) => [newEntry, ...xpLog]);
   await notifyXpSpend(actor, action);
 }
 
@@ -221,7 +269,6 @@ async function notifyXpSpend(actor, action) {
  * @returns {Promise<void>}
  */
 export async function xpLogEarn(actor, grant, available, total, note, granter="GM", statusId=undefined) {
-  const xpLog = actor.getFlag("starwarsffg", "xpLog") || [];
   const date = new Date().toISOString().slice(0, 10);
   let action;
   if (granter === "GM") {
@@ -240,7 +287,7 @@ export async function xpLogEarn(actor, grant, available, total, note, granter="G
     date: date,
     description: note,
   };
-  await actor.setFlag("starwarsffg", "xpLog", [newEntry, ...xpLog]);
+  await queueXpLogUpdate(actor, (xpLog) => [newEntry, ...xpLog]);
 }
 
 /**
@@ -252,7 +299,6 @@ export async function xpLogEarn(actor, grant, available, total, note, granter="G
  * @returns {Promise<void>}
  */
 export async function xpLogUndo(actor, undone, available, total) {
-  const xpLog = actor.getFlag("starwarsffg", "xpLog") || [];
   const date = new Date().toISOString().slice(0, 10);
   const newEntry = {
     action: "undid",
@@ -265,5 +311,5 @@ export async function xpLogUndo(actor, undone, available, total) {
     date: date,
     description: "Species XP",
   };
-  await actor.setFlag("starwarsffg", "xpLog", [newEntry, ...xpLog]);
+  await queueXpLogUpdate(actor, (xpLog) => [newEntry, ...xpLog]);
 }
