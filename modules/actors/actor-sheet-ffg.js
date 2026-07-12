@@ -109,22 +109,22 @@ export class ActorSheetFFG extends foundry.appv1.sheets.ActorSheet {
                   if(!this.actor.verifyEditModeIsNotEnabled()) return false;
 
                   if (cost > 0) {
-                    const AEState = await ActorHelpers.beginEditMode(this.actor, true);
-                    const updatedAvailableXP = this.actor.system.experience.available;
-                    await this.object.update({
-                      system: {
-                        experience: {
-                          available: updatedAvailableXP - cost,
+                    await ActorHelpers.withEditMode(this.actor, true, async () => {
+                      const updatedAvailableXP = this.actor.system.experience.available;
+                      await this.object.update({
+                        system: {
+                          experience: {
+                            available: updatedAvailableXP - cost,
+                          }
                         }
-                      }
+                      });
+                      await xpLogSpend(
+                          this.actor, `${game.i18n.localize("SWFFG.DragDrop.XPLog")} ${itemData.type} ${itemData.name}`,
+                          cost,
+                          this.actor.system.experience.available,
+                          this.actor.system.experience.total
+                      );
                     });
-                    await xpLogSpend(
-                        this.actor, `${game.i18n.localize("SWFFG.DragDrop.XPLog")} ${itemData.type} ${itemData.name}`,
-                        cost,
-                        this.actor.system.experience.available,
-                        this.actor.system.experience.total
-                    );
-                    await ActorHelpers.endEditMode(this.actor, AEState, true);
                   }
                 },
               },
@@ -2529,18 +2529,18 @@ export class ActorSheetFFG extends foundry.appv1.sheets.ActorSheet {
                 }
               }
               await this.object.createEmbeddedDocuments("Item", [purchasedItem]);
-              const AEState = await ActorHelpers.beginEditMode(this.actor, true);
-              const updatedAvailableXP = this.actor.system.experience.available;
-              // this does not use _spendXp as it's granting items, which AEs cannot reasonably do
-              await this.object.update({
-                system: {
-                  experience: {
-                    available: updatedAvailableXP - cost,
+              await ActorHelpers.withEditMode(this.actor, true, async () => {
+                const updatedAvailableXP = this.actor.system.experience.available;
+                // this does not use _spendXp as it's granting items, which AEs cannot reasonably do
+                await this.object.update({
+                  system: {
+                    experience: {
+                      available: updatedAvailableXP - cost,
+                    },
                   },
-                },
+                });
+                await xpLogSpend(game.actors.get(this.object.id), `new ${action} ${purchasedItem.name}`, cost, availableXP - cost, totalXP, undefined);
               });
-              await xpLogSpend(game.actors.get(this.object.id), `new ${action} ${purchasedItem.name}`, cost, availableXP - cost, totalXP, undefined);
-              await ActorHelpers.endEditMode(this.actor, AEState, true);
             },
           },
           cancel: {
@@ -2654,24 +2654,26 @@ export class ActorSheetFFG extends foundry.appv1.sheets.ActorSheet {
           icon: '<i class="fas fa-check"></i>',
           label: game.i18n.localize("SWFFG.XP.Adjust.Confirm"),
           callback: async () => {
+            // read the form before the first await; Dialog detaches its DOM once this callback yields
             const availableXPToLog = foundry.utils.deepClone(parseInt(this.actor.system.experience.available));
             const adjustAmount = parseInt($("#adjustAmount").val());
             const adjustReason = foundry.utils.deepClone($("#adjustReason").val());
-            const AEState = await ActorHelpers.beginEditMode(this.actor, true);
-            const startingAvailableXP =  foundry.utils.deepClone(parseInt(this.actor.system.experience.available));
-            const totalXP =  foundry.utils.deepClone(parseInt(this.actor.system.experience.total));
-            const updatedAvailableXP = startingAvailableXP + adjustAmount;
-            const updatedTotalXP = totalXP + adjustAmount;
-            await this.actor.update({ 'system.experience.available': updatedAvailableXP, 'system.experience.total': updatedTotalXP });
-            await xpLogEarn(
-              this.object,
-              adjustAmount,
-              availableXPToLog + adjustAmount,
-              updatedTotalXP,
-              adjustReason,
-              "Self"
-            );
-            await ActorHelpers.endEditMode(this.actor, AEState, true);
+
+            await ActorHelpers.withEditMode(this.actor, true, async () => {
+              const startingAvailableXP =  foundry.utils.deepClone(parseInt(this.actor.system.experience.available));
+              const totalXP =  foundry.utils.deepClone(parseInt(this.actor.system.experience.total));
+              const updatedAvailableXP = startingAvailableXP + adjustAmount;
+              const updatedTotalXP = totalXP + adjustAmount;
+              await this.actor.update({ 'system.experience.available': updatedAvailableXP, 'system.experience.total': updatedTotalXP });
+              await xpLogEarn(
+                this.object,
+                adjustAmount,
+                availableXPToLog + adjustAmount,
+                updatedTotalXP,
+                adjustReason,
+                "Self"
+              );
+            });
           },
         },
         two: {

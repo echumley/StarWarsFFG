@@ -1219,18 +1219,19 @@ export class ItemSheetFFG extends foundry.appv1.sheets.ItemSheet {
       ui.notifications.warn(game.i18n.localize("SWFFG.Actors.Sheets.Purchase.NotEnoughXP"));
       throw new Error("Not enough XP");
     }
-    const AEState = await ActorHelpers.beginEditMode(owner, true);
-    const availableXP = owner.system.experience.available;
+    // this deliberately does not enter edit mode: callers wrap the purchase in
+    // ActorHelpers.withEditMode so the restore can't be forgotten or skipped by a throw.
+    // The AE-suppressed available XP must be read inside that callback, not here.
     return {
       owner: owner,
       cost: cost,
-      availableXP: availableXP,
       availableXPToLog: availableXPToLog,
       totalXP: totalXP,
-      AEState: AEState,
     }
   }
 
+  // NOTE: currently unreachable - nothing dispatches to this. It also passes `li` where
+  // _buyHandleClick expects `cost`, so the cost math would produce NaN if it were ever wired up.
   async _buyTalent(li) {
     let owner;
     let cost;
@@ -1240,7 +1241,6 @@ export class ItemSheetFFG extends foundry.appv1.sheets.ItemSheet {
       const basic_data = await this._buyHandleClick(li, "specialization");
       owner = basic_data.owner;
       cost = basic_data.cost;
-      availableXP = basic_data.availableXP;
       totalXP = basic_data.totalXP;
     } catch (e) {
       return;
@@ -1256,13 +1256,16 @@ export class ItemSheetFFG extends foundry.appv1.sheets.ItemSheet {
             icon: '<i class="fa-regular fa-circle-up"></i>',
             label: game.i18n.localize("SWFFG.Actors.Sheets.Purchase.ConfirmPurchase"),
             callback: async (that) => {
-              // update the form because the fields are read when an update is performed
-              const talentId = $(li).attr("id");
-              const input = $(`[name="data.talents.${talentId}.islearned"]`, this.element)[0];
-              input.checked = true;
-              await this.object.sheet.submit();
-              owner.update({system: {experience: {available: availableXP - cost}}});
-              await xpLogSpend(owner, `specialization ${baseName} talent ${talent}`, cost, availableXP - cost, totalXP);
+              await ActorHelpers.withEditMode(owner, true, async () => {
+                availableXP = owner.system.experience.available;
+                // update the form because the fields are read when an update is performed
+                const talentId = $(li).attr("id");
+                const input = $(`[name="data.talents.${talentId}.islearned"]`, this.element)[0];
+                input.checked = true;
+                await this.object.sheet.submit();
+                await owner.update({system: {experience: {available: availableXP - cost}}});
+                await xpLogSpend(owner, `specialization ${baseName} talent ${talent}`, cost, availableXP - cost, totalXP);
+              });
             },
           },
           cancel: {
@@ -1380,7 +1383,6 @@ export class ItemSheetFFG extends foundry.appv1.sheets.ItemSheet {
     let owner;
     let availableXP;
     let totalXP;
-    let AEState;
     let availableXPToLog;
     const dialog = new Dialog(
       {
@@ -1395,20 +1397,21 @@ export class ItemSheetFFG extends foundry.appv1.sheets.ItemSheet {
                 // this fixes the actual math bugs but the log shows incorrect values. need to fix that.
                 const basic_data = await this._buyHandleClick(cost, "forcepower");
                 owner = basic_data.owner;
-                availableXP = basic_data.availableXP;
                 totalXP = basic_data.totalXP;
-                AEState = basic_data.AEState;
                 availableXPToLog = basic_data.availableXPToLog;
               } catch (e) {
                 return;
               }
-              // update the form because the fields are read when an update is performed
-              const input = $(`[name="data.upgrades.${upgradeId}.islearned"]`, this.element)[0];
-              input.checked = true;
-              await this.object.sheet.submit({preventClose: true});
-              owner.update({system: {experience: {available: availableXP - cost}}});
-              await xpLogSpend(owner, `force power ${baseName} upgrade ${upgradeName}`, cost, availableXPToLog - cost, totalXP);
-              await ActorHelpers.endEditMode(owner, AEState, true);
+              await ActorHelpers.withEditMode(owner, true, async () => {
+                // read inside edit mode so this is the base value, without the purchase AEs applied
+                availableXP = owner.system.experience.available;
+                // update the form because the fields are read when an update is performed
+                const input = $(`[name="data.upgrades.${upgradeId}.islearned"]`, this.element)[0];
+                input.checked = true;
+                await this.object.sheet.submit({preventClose: true});
+                await owner.update({system: {experience: {available: availableXP - cost}}});
+                await xpLogSpend(owner, `force power ${baseName} upgrade ${upgradeName}`, cost, availableXPToLog - cost, totalXP);
+              });
             },
           },
           cancel: {
@@ -1432,7 +1435,6 @@ export class ItemSheetFFG extends foundry.appv1.sheets.ItemSheet {
     let owner;
     let availableXP;
     let totalXP;
-    let AEState;
     let availableXPToLog;
     const dialog = new Dialog(
       {
@@ -1448,21 +1450,22 @@ export class ItemSheetFFG extends foundry.appv1.sheets.ItemSheet {
                 // this fixes the actual math bugs but the log shows incorrect values. need to fix that.
                 const basic_data = await this._buyHandleClick(cost, "signatureability");
                 owner = basic_data.owner;
-                availableXP = basic_data.availableXP;
                 totalXP = basic_data.totalXP;
-                AEState = basic_data.AEState;
                 availableXPToLog = basic_data.availableXPToLog;
               } catch (e) {
                 return;
               }
 
-              // update the form because the fields are read when an update is performed
-              const input = $(`[name="data.upgrades.${upgradeId}.islearned"]`, this.element)[0];
-              input.checked = true;
-              await this.object.sheet.submit({preventClose: true});
-              owner.update({system: {experience: {available: availableXP - cost}}});
-              await xpLogSpend(owner, `signature ability ${baseName} upgrade ${upgradeName}`, cost, availableXPToLog - cost, totalXP);
-              await ActorHelpers.endEditMode(owner, AEState, true);
+              await ActorHelpers.withEditMode(owner, true, async () => {
+                // read inside edit mode so this is the base value, without the purchase AEs applied
+                availableXP = owner.system.experience.available;
+                // update the form because the fields are read when an update is performed
+                const input = $(`[name="data.upgrades.${upgradeId}.islearned"]`, this.element)[0];
+                input.checked = true;
+                await this.object.sheet.submit({preventClose: true});
+                await owner.update({system: {experience: {available: availableXP - cost}}});
+                await xpLogSpend(owner, `signature ability ${baseName} upgrade ${upgradeName}`, cost, availableXPToLog - cost, totalXP);
+              });
             },
           },
           cancel: {
@@ -1486,7 +1489,6 @@ export class ItemSheetFFG extends foundry.appv1.sheets.ItemSheet {
     let owner;
     let availableXP;
     let totalXP;
-    let AEState;
     let availableXPToLog;
     const dialog = new Dialog(
       {
@@ -1501,16 +1503,18 @@ export class ItemSheetFFG extends foundry.appv1.sheets.ItemSheet {
               try {
                 const basic_data = await this._buyHandleClick(cost, "specialization");
                 owner = basic_data.owner;
-                availableXP = basic_data.availableXP;
                 totalXP = basic_data.totalXP;
-                AEState = basic_data.AEState;
                 availableXPToLog = basic_data.availableXPToLog;
               } catch (e) {
                 return;
               }
-              owner.update({system: {experience: {available: availableXP - cost}}});
-              await xpLogSpend(owner, `specialization ${baseName} upgrade ${upgradeName}`, cost, availableXPToLog - cost, totalXP);
-              await ActorHelpers.endEditMode(owner, AEState, true);
+              await ActorHelpers.withEditMode(owner, true, async () => {
+                // read inside edit mode so this is the base value, without the purchase AEs applied
+                availableXP = owner.system.experience.available;
+                await owner.update({system: {experience: {available: availableXP - cost}}});
+                await xpLogSpend(owner, `specialization ${baseName} upgrade ${upgradeName}`, cost, availableXPToLog - cost, totalXP);
+              });
+              // this sheet submits after edit mode ends, unlike the force power / signature ability paths
               // update the form because the fields are read when an update is performed
               const input = $(`[name="data.talents.${upgradeId}.islearned"]`, this.element)[0];
               input.checked = true;

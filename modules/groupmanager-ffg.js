@@ -356,17 +356,26 @@ export class GroupManager extends FormApplication {
           icon: '<i class="fas fa-check"></i>',
           label: game.i18n.localize("SWFFG.GrantXP"),
           callback: async () => {
-            const state = await ActorHelpers.beginEditMode(character, true);
+            // read the form before the first await: Dialog closes and detaches its DOM as soon as
+            // this callback yields, after which getElementById returns null
             const container = document.getElementById(id);
-            const amount = container.querySelector('input[name="amount"]');
+            if (!container) {
+              CONFIG.logger.warn("Unable to locate the XP grant form");
+              return;
+            }
+            const amount = +container.querySelector('input[name="amount"]').value;
             const note = container.querySelector('input[name="note"]').value;
-            const available = +character.system.experience.available + +amount.value;
-            const total = +character.system.experience.total + +amount.value;
-            character.update({ ["system.experience.total"]: +character.system.experience.total + +amount.value });
-            character.update({ ["system.experience.available"]: +character.system.experience.available + +amount.value });
-            await xpLogEarn(character, amount.value, available, total, note);
-            await ActorHelpers.endEditMode(character, state, true);
-            ui.notifications.info(`Granted ${amount.value} XP to ${character.name}.`);
+
+            await ActorHelpers.withEditMode(character, true, async () => {
+              const available = +character.system.experience.available + amount;
+              const total = +character.system.experience.total + amount;
+              await character.update({
+                "system.experience.total": total,
+                "system.experience.available": available,
+              });
+              await xpLogEarn(character, amount, available, total, note);
+            });
+            ui.notifications.info(`Granted ${amount} XP to ${character.name}.`);
           },
         },
         two: {
@@ -392,22 +401,30 @@ export class GroupManager extends FormApplication {
           icon: '<i class="fas fa-check"></i>',
           label: game.i18n.localize("SWFFG.GrantXP"),
           callback: async () => {
+            // read the form before the first await; see _grantXP
             const container = document.getElementById(id);
-            const amount = container.querySelector('input[name="amount"]');
+            if (!container) {
+              CONFIG.logger.warn("Unable to locate the XP grant form");
+              return;
+            }
+            const amount = +container.querySelector('input[name="amount"]').value;
             const note = container.querySelector('input[name="note"]').value;
+
             for (const c of characters) {
               const character = game.actors.get(c);
               if (character?.type !== "character") {
                 continue;
               }
-              const state = await ActorHelpers.beginEditMode(character, true);
-              const available = +character.system.experience.available + +amount.value;
-              const total = +character.system.experience.total + +amount.value;
-              character.update({ ["system.experience.total"]: +character.system.experience.total + +amount.value });
-              character.update({ ["system.experience.available"]: +character.system.experience.available + +amount.value });
-              await xpLogEarn(character, amount.value, available, total, note);
-              await ActorHelpers.endEditMode(character, state, true);
-              ui.notifications.info(`Granted ${amount.value} XP to ${character.name}.`);
+              await ActorHelpers.withEditMode(character, true, async () => {
+                const available = +character.system.experience.available + amount;
+                const total = +character.system.experience.total + amount;
+                await character.update({
+                  "system.experience.total": total,
+                  "system.experience.available": available,
+                });
+                await xpLogEarn(character, amount, available, total, note);
+              });
+              ui.notifications.info(`Granted ${amount} XP to ${character.name}.`);
             }
           },
         },

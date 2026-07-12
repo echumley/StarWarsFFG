@@ -1,6 +1,9 @@
 import ModifierHelpers from "./modifiers.js";
 import {migrateDataToSystem} from "./migration.js";
 
+// in-flight edit mode session per actor id; see ActorHelpers.withEditMode
+const editModeLocks = new Map();
+
 export default class ActorHelpers {
   static async updateActor(event, formData) {
     formData = foundry.utils.expandObject(formData);
@@ -68,9 +71,45 @@ export default class ActorHelpers {
   }
 
   /**
+   * Runs `fn` with the actor's Active Effects suspended, and always restores them afterwards.
+   * This is the only supported way to enter edit mode - do not call begin/endEditMode directly.
+   *
+   * Two guarantees, both of which are load-bearing because a character's XP purchases live
+   * entirely in Active Effects, so leaving them suspended silently zeroes out the character:
+   *
+   *  - Sessions on the same actor are serialized. beginEditMode snapshots each effect's current
+   *    `disabled` value and endEditMode restores it, so two overlapping sessions would let the
+   *    second snapshot the *suspended* state and then faithfully "restore" every effect to
+   *    disabled. Rapid purchases were doing exactly this.
+   *  - The restore runs in a `finally`. With persistChanges=true the suspension is written to the
+   *    database, so anything throwing between begin and end would otherwise brick the character
+   *    permanently.
+   *
+   * @param actor - the actor to suspend Active Effects on
+   * @param persistChanges - see beginEditMode. True for XP grants and purchases.
+   * @param fn - async callback run while effects are suspended; its return value is passed through
+   * @returns {Promise<*>}
+   */
+  static async withEditMode(actor, persistChanges, fn) {
+    const previous = editModeLocks.get(actor.id) ?? Promise.resolve();
+    const session = previous.then(async () => {
+      const state = await ActorHelpers.beginEditMode(actor, persistChanges);
+      try {
+        return await fn();
+      } finally {
+        await ActorHelpers.endEditMode(actor, state, persistChanges);
+      }
+    });
+    // swallow failures on the chain itself so one bad session doesn't wedge every later one
+    editModeLocks.set(actor.id, session.catch(() => {}));
+    return session;
+  }
+
+  /**
    * Records the state of all active effects on the actor and then suspends them.
    * This is used to enable manual editing without an infinite loop from the two being combined
    * Note that this returns a state, which is REQUIRED to restore the original AE state
+   * Prefer withEditMode() - it guarantees the restore actually happens.
    *
    * The two modes are deliberately asymmetric:
    *  - persistChanges=false uses updateSource(), which is an in-memory change with no DB write
@@ -106,7 +145,13 @@ export default class ActorHelpers {
       }
     }
     if (actorEffectUpdates.length > 0) {
-      await actor.updateEmbeddedDocuments("ActiveEffect", actorEffectUpdates);
+      // a failure here must not abort the suspend: the snapshot is already recorded, so endEditMode
+      // will still restore everything, but bailing early would leave the caller editing live values
+      try {
+        await actor.updateEmbeddedDocuments("ActiveEffect", actorEffectUpdates);
+      } catch (err) {
+        CONFIG.logger.error(`Failed to suspend Active Effects on ${actor.name}`, err);
+      }
     }
 
     // Record item-based effects
@@ -128,7 +173,11 @@ export default class ActorHelpers {
         }
       }
       if (itemEffectUpdates.length > 0) {
-        await item.updateEmbeddedDocuments("ActiveEffect", itemEffectUpdates);
+        try {
+          await item.updateEmbeddedDocuments("ActiveEffect", itemEffectUpdates);
+        } catch (err) {
+          CONFIG.logger.error(`Failed to suspend Active Effects on item ${item.name}`, err);
+        }
       }
     }
 
@@ -154,7 +203,13 @@ export default class ActorHelpers {
       }
     }
     if (actorEffectUpdates.length > 0) {
-      await actor.updateEmbeddedDocuments("ActiveEffect", actorEffectUpdates);
+      // never let one failing write abort the restore: whatever we skip stays suspended, and a
+      // suspended effect is an XP purchase the character silently loses
+      try {
+        await actor.updateEmbeddedDocuments("ActiveEffect", actorEffectUpdates);
+      } catch (err) {
+        CONFIG.logger.error(`Failed to restore Active Effects on ${actor.name}`, err);
+      }
     }
 
     // revert the state for item-based effects
@@ -179,7 +234,13 @@ export default class ActorHelpers {
           }
         }
         if (itemEffectUpdates.length > 0) {
-          await item.updateEmbeddedDocuments("ActiveEffect", itemEffectUpdates);
+          // an item can be deleted while we await an earlier one (buying a specialization churns
+          // the item list), which rejects here; keep going so the rest of the items still restore
+          try {
+            await item.updateEmbeddedDocuments("ActiveEffect", itemEffectUpdates);
+          } catch (err) {
+            CONFIG.logger.error(`Failed to restore Active Effects on item ${item.name}`, err);
+          }
         }
       } else {
         CONFIG.logger.debug("> no item AEs in stored state, skipping further processing");
